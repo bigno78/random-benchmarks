@@ -2,46 +2,87 @@
 
 #include <iostream>
 #include <sstream>
-#include <cinttypes> // strtoumax
 #include <charconv> // from_chars
+#include <random>
+#include <climits>
 
 
-size_t parse_string_stream(const std::string& str) {
+// On windows size_t is long long unsigned int and on linux it is long unsigned int.
+#ifdef _WIN32
+    #define FMT "%llu %llu"
+#else
+    #define FMT "%lu %lu"
+#endif
+
+
+enum class ErrCode {
+    success,
+    empty,
+    error
+};
+
+struct Result {
+    size_t row;
+    size_t col;
+    ErrCode err;
+};
+
+
+////////////////////////////////////////////////////////////////////////////////////
+//                                                                                // 
+//                          BENCHMARKED IMPLEMENTATIONS                           //
+//                                                                                //
+////////////////////////////////////////////////////////////////////////////////////
+
+Result parse_string_stream(const std::string& str) {
+    Result result;
     std::stringstream sstream(str);
 
     sstream >> std::ws;
+    
     if (sstream.eof()) {
-        return 0;
+        result.err = ErrCode::empty;
+        return result;
     }
 
-    size_t row, col;
-    sstream >> row >> col;
-
+    sstream >> result.row >> result.col;
+    
     if (!sstream) {
-        return -1;
-    }
-
-    return row + col;
-}
-
-
-size_t parse_sscanf(const std::string& str) {
-    size_t row, col;
-    auto res = sscanf(str.c_str(), "%lu %lu", &row, &col);
-
-    if (res == EOF) {
-        return 0;
+        result.err = ErrCode::error;
+        return result;
     }
     
-    if (res < 2) {
-        return -1;
-    }
+    result.err = ErrCode::success;
 
-    return row + col;
+    return result;
 }
 
 
-size_t parse_manual(const std::string& str) {
+Result parse_sscanf(const std::string& str) {
+    Result res;
+
+    // clear errno so we don't get leftover ERANGE from other calls
+    errno = 0;
+
+    auto count = sscanf(str.c_str(), FMT, &res.row, &res.col);
+
+    if (count == EOF) {
+        res.err = ErrCode::empty;
+        return res;
+    }
+    
+    if (count < 2 || errno == ERANGE) {
+        res.err = ErrCode::error;
+        return res;
+    }
+
+    res.err = ErrCode::success;
+    return res;
+}
+
+
+Result parse_strtoull(const std::string& str) {
+    Result res;
     size_t i = 0;
 
     while (i < str.size() && isspace(str[i])) {
@@ -49,105 +90,48 @@ size_t parse_manual(const std::string& str) {
     }
 
     if (i >= str.size()) {
-        return 0;
+        res.err = ErrCode::empty;
+        return res;
     }
 
-    if (!isdigit(str[i])) {
-        return -1;
-    }
-
-    size_t row = 0;
-    while(i < str.size() && isdigit(str[i])) {
-        row = row*10 + (str[i] - '0');
-        ++i;
-    }
-
-    while (i < str.size() && isspace(str[i])) {
-        ++i;
-    }
-
-    if (i >= str.size() || !isdigit(str[i])) {
-        return -1;
-    }
-
-    size_t col = 0;
-    while(i < str.size() && isdigit(str[i])) {
-        col = col*10 + (str[i] - '0');
-        ++i;
-    }
-
-    return row + col;
-}
-
-
-size_t parse_strtoull(const std::string& str) {
-    size_t i = 0;
-
-    while (i < str.size() && isspace(str[i])) {
-        ++i;
-    }
-
-    if (i >= str.size()) {
-        return 0;
-    }
+    // clear errno so we don't get leftover ERANGE from other calls
+    errno = 0;
 
     char* end = nullptr;
-    size_t row = std::strtoull(&str[i], &end, 10);
-    if (&str[i] == end) {
-        return -1;
+    res.row = std::strtoull(&str[i], &end, 10);
+    if (&str[i] == end || (res.row == ULLONG_MAX && errno == ERANGE)) {
+        res.err = ErrCode::error;
+        return res;
     }
 
     char* next_end = nullptr;
-    size_t col = std::strtoull(end, &next_end, 10);
-    if (next_end == end) {
-        return -1;
+    res.col = std::strtoull(end, &next_end, 10);
+    if (next_end == end || (res.col == ULLONG_MAX && errno == ERANGE)) {
+        res.err = ErrCode::error;
+        return res;
     }
 
-    return row + col;
+    res.err = ErrCode::success;
+    return res;
 }
 
 
-size_t parse_strtoumax(const std::string& str) {
-    size_t i = 0;
-
-    while (i < str.size() && isspace(str[i])) {
-        ++i;
-    }
-
-    if (i >= str.size()) {
-        return 0;
-    }
-
-    char* end = nullptr;
-    size_t row = std::strtoumax(&str[i], &end, 10);
-    if (&str[i] == end) {
-        return -1;
-    }
-
-    char* next_end = nullptr;
-    size_t col = std::strtoumax(end, &next_end, 10);
-    if (next_end == end) {
-        return -1;
-    }
-
-    return row + col;
-}
-
-
-size_t parse_from_chars(const std::string& str) {
+Result parse_from_chars(const std::string& str) {
+    Result result;
     size_t i = 0;
 
     while (i < str.size() && isspace(str[i])) {
         ++i;
     }
     if (i >= str.size()) {
-        return 0;
+        result.err = ErrCode::empty;
+        return result;
     }
 
-    size_t row;
-    auto res = std::from_chars(&str[i], str.data() + str.size(), row);
-    if (res.ec == std::errc::invalid_argument) {
-        return -1;
+    auto res = std::from_chars(&str[i], str.data() + str.size(), result.row);
+    if (res.ec == std::errc::invalid_argument || res.ec == std::errc::result_out_of_range) {
+        result.err = ErrCode::error;
+        return result;
     }
 
     i = res.ptr - str.data();
@@ -156,20 +140,129 @@ size_t parse_from_chars(const std::string& str) {
         ++i;
     }
     if (i >= str.size()) {
-        return -1;
+        result.err = ErrCode::error;
+        return result;
     }
 
-    size_t col;
-    res = std::from_chars(&str[i], str.data() + str.size(), col);
-    if (res.ec == std::errc::invalid_argument) {
-        return -1;
+    res = std::from_chars(&str[i], str.data() + str.size(), result.col);
+    if (res.ec == std::errc::invalid_argument || res.ec == std::errc::result_out_of_range) {
+        result.err = ErrCode::error;
+        return result;
     }
 
-    return row + col;
+    result.err = ErrCode::success;
+    return result;
+}
+
+bool parse_single(const std::string& str, size_t i, size_t& end, size_t& val) {
+    // DISCLAIMER!!!!!
+    // the implementation of overflow handling is taken from the Microsoft C++ Standard Library
+    
+    constexpr size_t max_val = size_t(-1);
+    constexpr size_t risky_val = max_val/10;
+    constexpr size_t max_digit = max_val % 10;
+    
+    size_t res = 0;
+    while(i < str.size() && isdigit(str[i])) {
+        size_t d = str[i] - '0';
+        if (res < risky_val || (res == risky_val && d <= max_digit)) {
+            res = res*10 + d;
+        } else {
+            return false;
+        }
+        ++i;
+    }
+
+    end = i;
+    val = res;
+
+    return true;
+}
+
+Result parse_custom(const std::string& str) {
+    Result res;
+    size_t i = 0;
+
+    while (i < str.size() && isspace(str[i])) {
+        ++i;
+    }
+
+    if (i >= str.size()) {
+        res.err = ErrCode::empty;
+        return res;
+    }
+
+    if (!isdigit(str[i])) {
+        res.err = ErrCode::error;
+        return res;
+    }
+
+    size_t end;
+    if (!parse_single(str, i, end, res.row)) {
+        res.err = ErrCode::error;
+        return res;
+    }
+    i = end;
+
+    while (i < str.size() && isspace(str[i])) {
+        ++i;
+    }
+
+    if (i >= str.size() || !isdigit(str[i])) {
+        res.err = ErrCode::error;
+        return res;
+    }
+
+    if (!parse_single(str, i, end, res.col)) {
+        res.err = ErrCode::error;
+        return res;
+    }
+
+    res.err = ErrCode::success;
+    return res;
 }
 
 
-#define CHECK_CASE(expr) \
+////////////////////////////////////////////////////////////////////////////////////
+//                                                                                // 
+//                                TEST STUFF                                      //
+//                                                                                //
+////////////////////////////////////////////////////////////////////////////////////
+
+bool operator==(Result a, Result b) {
+    if (a.err != b.err) {
+        return false;
+    }
+
+    if (a.err != ErrCode::success) {
+        return true;
+    }
+
+    return a.col == b.col && a.row == b.row;
+}
+
+bool operator!=(Result a, Result b) {
+    return !(a == b);
+}
+
+std::ostream& operator<<(std::ostream& out, Result res) {
+    switch (res.err) {
+        case ErrCode::empty:
+            out << "empty string";
+            break;
+        case ErrCode::error:
+            out << "error";
+            break;
+        case ErrCode::success:
+            out << res.row << " " << res.col;
+            break;
+        default:
+            out << "unknown";
+    }
+    return out;
+}
+
+#define EARLY_RETURN(expr) \
     if (true) {          \
         if (!(expr)) {   \
             return;      \
@@ -177,11 +270,31 @@ size_t parse_from_chars(const std::string& str) {
     } else (void)0
 
 
-template<typename Func>
-void test_case(Func func, const std::string& test_name) {
+std::mt19937 mt;
 
-    auto test_single_input = [&](const std::string& input, size_t expected) {
-        size_t actual = func(input);
+template<typename Func>
+void test_overflow(Func func, const std::string& test_name) {
+    size_t max_val = size_t(-1);
+    size_t critical_val = max_val/10;
+
+    std::uniform_int_distribution<size_t> dist(critical_val + 1, max_val);
+
+    for (size_t i = 0; i < 100'000; ++i) {
+        std::string str = std::to_string(dist(mt)) + "0 10";
+        auto res = func(str);
+        if (res.err != ErrCode::error) {
+            std::cout << "OVERFLOW TEST FAILED: " << test_name << "\n";
+            std::cout << "    Input: " << str << "\n";
+            return;
+        }
+    }
+}
+
+template<typename Func>
+void test_parse_func(Func func, const std::string& test_name) {
+
+    auto test_single_input = [&] (const std::string& input, Result expected) {
+        Result actual = func(input);
         if (actual != expected) {
             std::cerr << "TEST FAILED: " << test_name << "\n";
             std::cerr << "    On input: '" << input << "'\n";
@@ -192,30 +305,44 @@ void test_case(Func func, const std::string& test_name) {
         return true;
     };
 
-    CHECK_CASE( test_single_input("25 3568 1.00256", 3593) );
-    CHECK_CASE( test_single_input("25 3568 ", 3593) );
-    CHECK_CASE( test_single_input("  25  3568  1.00256   ", 3593) );
-    CHECK_CASE( test_single_input("", 0) );
-    CHECK_CASE( test_single_input("    \t\t   \n", 0) );
-    CHECK_CASE( test_single_input(" k  11100 36 ", size_t(-1)) );
-    CHECK_CASE( test_single_input(" 11100 ? 36 ", size_t(-1)) );
-    CHECK_CASE( test_single_input(" 11100 36 ?", 11136) );
+    EARLY_RETURN( test_single_input("252165 1682156", { 252165, 1682156, ErrCode::success }) );
+    EARLY_RETURN( test_single_input("252165 1682156 1.00256", { 252165, 1682156, ErrCode::success }) );
+    EARLY_RETURN( test_single_input("252165 1682156 ???", { 252165, 1682156, ErrCode::success }) );
+    EARLY_RETURN( test_single_input(" \t 252165 \t 1682156 \t ", { 252165, 1682156, ErrCode::success }) );
+
+    EARLY_RETURN( test_single_input("", { 0, 0, ErrCode::empty }) );
+    EARLY_RETURN( test_single_input("    \t\t   \n", { 0, 0, ErrCode::empty }) );
+
+    EARLY_RETURN( test_single_input(" k  11100 36 ", { 0, 0, ErrCode::error }) );
+    EARLY_RETURN( test_single_input(" 11100 ? 36 ", { 0, 0, ErrCode::error }) );
+    EARLY_RETURN( test_single_input("18446744073709551616 36", { 0, 0, ErrCode::error }) );
+    EARLY_RETURN( test_single_input("26 18446744073709551616", { 0, 0, ErrCode::error }) );
+    EARLY_RETURN( test_single_input("26 184467440737095516111", { 0, 0, ErrCode::error }) );
+    EARLY_RETURN( test_single_input("26 53197085087656854960", { 0, 0, ErrCode::error }) );
 
     std::cerr << "TEST PASSED: " << test_name << "\n";
 }
 
 
+////////////////////////////////////////////////////////////////////////////////////
+//                                                                                // 
+//                                    MAIN                                        //
+//                                                                                //
+////////////////////////////////////////////////////////////////////////////////////
+
 int main() {
-    test_case(parse_string_stream, "string_stream");
-    test_case(parse_sscanf, "sscanf");
-    test_case(parse_manual, "custom");
-    test_case(parse_strtoull, "strtoull");
-    test_case(parse_strtoumax, "strtoumax");
-    test_case(parse_from_chars, "from_chars");
+    test_parse_func(parse_string_stream, "stringstream");
+    test_parse_func(parse_custom, "custom");
+    test_parse_func(parse_sscanf, "sscanf");
+    test_parse_func(parse_strtoull, "strtoull");
+    test_parse_func(parse_from_chars, "from_chars");
+
+    // test overflows in a bit more detailed way for my implementation
+    test_overflow(parse_custom, "custom");
+
     std::cerr << "\n";
 
-
-    std::string test_str = "2365 15985 25.01564 ";
+    std::string test_str = "236514 159854 25.01564 ";
 
     ankerl::nanobench::Bench()
         .run("stringstream", [&] {
@@ -226,20 +353,16 @@ int main() {
             auto res = parse_sscanf(test_str);    
             ankerl::nanobench::doNotOptimizeAway(res);
         })
-        .run("manual", [&] {
-            auto res = parse_manual(test_str);    
-            ankerl::nanobench::doNotOptimizeAway(res);
-        })
         .run("strtoull", [&] {
             auto res = parse_strtoull(test_str);    
             ankerl::nanobench::doNotOptimizeAway(res);
         })
-        .run("strtoumax", [&] {
-            auto res = parse_strtoumax(test_str);    
-            ankerl::nanobench::doNotOptimizeAway(res);
-        })
         .run("from_chars", [&] {
             auto res = parse_from_chars(test_str);    
+            ankerl::nanobench::doNotOptimizeAway(res);
+        })
+        .run("custom", [&] {
+            auto res = parse_custom(test_str);    
             ankerl::nanobench::doNotOptimizeAway(res);
         });
 }
