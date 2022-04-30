@@ -337,14 +337,22 @@ int main() {
     test_parse_func(parse_strtoull, "strtoull");
     test_parse_func(parse_from_chars, "from_chars");
 
-    // test overflows in a bit more detailed way for my implementation
+    // test overflows in a bit more detailed way for my custom implementation just to be sure
     test_overflow(parse_custom, "custom");
 
     std::cerr << "\n";
 
     std::string test_str = "236514 159854 25.01564 ";
 
-    ankerl::nanobench::Bench()
+    auto bench = ankerl::nanobench::Bench();
+
+    // on windows pyperf can't help us to setup the system for benechmarks
+    // so the benchmark is quite unstable and we have to use more iterations
+#ifdef _WIN32
+    bench = bench.minEpochIterations(200'000);
+#endif
+        
+    bench
         .run("stringstream", [&] {
             auto res = parse_string_stream(test_str);    
             ankerl::nanobench::doNotOptimizeAway(res);
