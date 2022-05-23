@@ -178,10 +178,32 @@ if (res > new_res) {
 }
 ```
 
-It passed my simple tests and I was proud of how quickly I came up with a working solution. Thankfully, a bit later when I was investigating the performance difference between this and `from_chars` I took a peek at the microsoft c++ standard library. And their overflow handling was quite different. That made me take a more closer look at my own solution and turns out it doesn't work at all.
+This passed my simple tests and I was proud of how quickly I came up with a working solution. However, a bit later when I was investigating the performance difference between this implementation and `from_chars` I took a peek at the microsoft c++ standard library and their overflow handling was quite different. That made me go back to my own solution and turns out it doesn't work at all.
 
+If `res` is a reasonably large value and we multiply it by 10 the result most likely overflows multiple times and it is basically lottery where it lands. So I needed something better. Thankfully, I already had something better - the standard library way of handling overflows. Which looks something like this:
+
+```cpp
+constexpr size_t max_val = size_t(-1);
+constexpr size_t risky_val = max_val/10;
+constexpr size_t max_digit = max_val % 10;
+    
+// ...
+
+size_t d = str[i] - '0';
+if (res < risky_val || (res == risky_val && d <= max_digit)) {
+    res = res*10 + d;
+} else {
+    // overflow!!!!
+}
+```
+
+Here, we first precalculate some useful values - `risky_val` is the largest number we can safely multiply by 10 without an overflow and `max_digit` is the largest digit we can safely add after this multiplication. So later, when processing a new digit, if the value accumulated so far is less then `risky_val` we know we are safe. If it is equal to `risky_val` we must be a bit cautious and check that the next digit doesn't exceed `max_digit`. In all other cases we have an overflow. It is as simple as that.
 
 ## Results
+
+Finally, we get to the most important part, the results.
+
+MSVC 19.31.31104.0
 
 |               ns/op |                op/s |    err% |     total | benchmark
 |--------------------:|--------------------:|--------:|----------:|:----------
