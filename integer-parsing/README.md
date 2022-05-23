@@ -205,7 +205,7 @@ Finally, we get to the most important part, the results. I build and ran the ben
 
 ### Linux
 
-The benchmark was built with `GCC 9.4.0`. Furthermore, I used [pyperf](https://github.com/psf/pyperf) to tune the system parameters with  `pyperf system tune` to make the benchmark more stable (as was suggested by the `nanobench` autoput).
+The benchmark was built with `GCC 9.4.0`. Furthermore, I used [pyperf](https://github.com/psf/pyperf) to tune the system parameters with  `pyperf system tune` to make the benchmark more stable (as was suggested by the `nanobench` output).
 
 When I build the benchmark using `-O2` I got the following results.
 
@@ -217,7 +217,7 @@ When I build the benchmark using `-O2` I got the following results.
 |               46.57 |       21,474,598.39 |    0.4% |      0.01 | `from_chars`
 |               31.93 |       31,323,390.26 |    1.3% |      0.01 | `custom`
 
-We can see that when *cppreference* says that `from_chars` is intended to be "the fastest possible implementation" it means it, since it outperforms all the other standard library solutions. However, what came as a suprise to me is that the custom implementation is even faster. That was quite suspicious so I checked out the standard library implementation and it led me to discover the overflow bug. But even after the fix, it is still faster.
+We can see that when *cppreference* says that `from_chars` is intended to be "the fastest possible implementation" it means it, since it outperforms all the other standard library solutions. However, what came as a surprise to me is that the custom implementation is even faster. That was quite suspicious and it led me to discover the overflow bug. But even after the fix, it is still faster.
 
 Interestingly, when built using `-O3` the result are a bit different.
 
