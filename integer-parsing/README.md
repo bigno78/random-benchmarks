@@ -144,7 +144,7 @@ This function is probably the most promising since *cppreference* says:
 
 > This is intended to allow the fastest possible implementation that is useful in common high-throughput contexts such as text-based interchange (JSON or XML).
 
-Similarly as with `strtoull` we have to check for the empty string ourselves, but this time it has one additional reason - `from_chars` doesn't skip leading whitespace. This means that we need to skip whitespace manually even before reading the scond number.
+Similarly as with `strtoull` we have to check for the empty string ourselves, but this time it has one additional reason - `from_chars` doesn't skip leading whitespace. This means that we need to skip whitespace manually even before reading the second number.
 
 The call to `from_chars` itself is pretty simple:
 
@@ -201,9 +201,40 @@ Here, we first precalculate some useful values - `risky_val` is the largest numb
 
 ## Results
 
-Finally, we get to the most important part, the results.
+Finally, we get to the most important part, the results. I build and ran the benchmark both on Windows 10 and Ubuntu 20.04.3 on my laptop with Intel Core i7-7700HQ 2.80GHz cpu.
 
-MSVC 19.31.31104.0
+### Linux
+
+The benchmark was built with `GCC 9.4.0`. Furthermore, I used [pyperf](https://github.com/psf/pyperf) to tune the system parameters with  `pyperf system tune` to make the benchmark more stable (as was suggested by the `nanobench` autoput).
+
+When I build the benchmark using `-O2` I got the following results.
+
+|               ns/op |                op/s |    err% |     total | benchmark
+|--------------------:|--------------------:|--------:|----------:|:----------
+|              595.64 |        1,678,855.72 |    0.5% |      0.01 | `stringstream`
+|              176.13 |        5,677,539.35 |    1.5% |      0.01 | `sscanf`
+|               57.18 |       17,489,920.67 |    1.3% |      0.01 | `strtoull`
+|               46.57 |       21,474,598.39 |    0.4% |      0.01 | `from_chars`
+|               31.93 |       31,323,390.26 |    1.3% |      0.01 | `custom`
+
+We can see that when *cppreference* says that `from_chars` is intended to be "the fastest possible implementation" it means it, since it outperforms all the other standard library solutions. However, what came as a suprise to me is that the custom implementation is even faster. That was quite suspicious so I checked out the standard library implementation and it led me to discover the overflow bug. But even after the fix, it is still faster.
+
+Interestingly, when built using `-O3` the result are a bit different.
+
+
+|               ns/op |                op/s |    err% |     total | benchmark
+|--------------------:|--------------------:|--------:|----------:|:----------
+|              589.78 |        1,695,558.48 |    0.1% |      0.01 | `stringstream`
+|              172.84 |        5,785,821.23 |    0.2% |      0.01 | `sscanf`
+|               58.55 |       17,078,590.75 |    1.0% |      0.01 | `strtoull`
+|               27.61 |       36,217,604.04 |    0.0% |      0.01 | `from_chars`
+|               30.09 |       33,238,469.22 |    0.0% |      0.01 | `custom`
+
+Now `from_chars` is slightly faster! I guess the main loop is easier for the compiler to unroll.
+
+### Windows
+
+The benchmark was built using `MSVC 19.31.31104.0`.
 
 |               ns/op |                op/s |    err% |     total | benchmark
 |--------------------:|--------------------:|--------:|----------:|:----------
@@ -212,3 +243,11 @@ MSVC 19.31.31104.0
 |               56.92 |       17,568,313.80 |    0.6% |      0.01 | `strtoull`
 |               46.36 |       21,570,059.64 |    0.1% |      0.01 | `from_chars`
 |               31.86 |       31,386,324.55 |    0.2% |      0.01 | `custom`
+
+### Conclusions
+
+All in all, it seems that the custom solution is the best. On linux with `-O3` it was slightly slower then `from_chars` but the margin was quite low and in all other cases it was faster or equal.
+
+If I had to say why that is, my first guess would be I overlooked something and my implementation is not correct. However, my second guess would be that `from_chars` has to handle more cases that I do. Sure, the requirements the standard places on it are quite cutdown compared to the other standard library facilities - it doesn't need to care about the locale, doesn't throw, doesn't need to handle the `+` prefix and `-` only for signed types. But still, it needs to work for all integer types and all bases. That would be a lot of overloads, so it all has to be in a single or just couple of implementations. And that is my advantage. I didn't need to care about that and focused only on my special case.
+
+With that said, for production code I would go with `from_chars` since I trust the standard library implementors a bit more then myself. However, for my side project I will live on the edge and happily use my own custom mess of a code. 
