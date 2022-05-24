@@ -10,16 +10,16 @@ Currently I am making a command-line application where I need to parse files con
 <row-index> <col-index> <float-value>
 ```
 
-In my application I care only about the indices so I don't need to parse the floating point value and I can just ignore it. I don't even check it is there and it is in the correct format. Additionally, there can be empty lines (containing only whitespace) anywhere in the file.
+In my application I care only about the indices so I don't need to parse the floating point value and I can just ignore it. Additionally, there can be empty lines (containing only whitespace) anywhere in the file.
 
-What is important, there is a whole bunch of these lines - up to about 2 million. Originally, I was using `stringstream` for the parsing but the application was running pretty slow and profiling revealed that about 99 % of the time was spent doing whatever `stringstream` is doing. So it appears I need something better.
+Importantly, there is a whole bunch of these lines - up to about 2 million. Originally, I was using `stringstream` for the parsing but the application was running pretty slow and profiling revealed that about 99 % of the time was spent doing whatever `stringstream` is doing. So it appears I need something better.
 
 ## The implementations
 
 We want a function that takes a string and
  - extracts two whitespace separated *positive* integers from the beginning of the string and ignores the rest
  - reports an error if they are not there or if they would not fit into a 64-bit unsigned integer
- - however, if the line contains only whitespace it doesn't report an error
+ - if the line contains only whitespace it reports a different kind of error
 
 To realize these requirements all the implementations have the following signature:
 
@@ -76,7 +76,7 @@ Result parse_string_stream(const std::string& str) {
 
 ### sscanf
 
-Again, this is a pretty simple solution. Apart from one slight issue. There does not seem to be a standard way to check whether an overflow happened (the number in the string didn't fit into `size_t`). The c standard simply states that it is undefined behavior:
+Again, this is a pretty simple solution. Apart from one slight issue. There does not seem to be a standard way to check whether an overflow happened (the number in the string didn't fit into `size_t`). The c standard simply states that it is undefined behavior.
 
 > the result of the conversion is placed in the object pointed to by the first argument following the format argument that has not already received a conversion result. If this object does not have an appropriate type, *or if the result of the conversion cannot be represented in the object, the behavior is undefined.*
 
@@ -111,7 +111,7 @@ Result parse_sscanf(const std::string& str) {
 Starting with this implementation I won't show the full code since it gets quite long and repetitive.
 
 With `strtoull` there is no way to distinguish between reading the whole string without finding a non-whitespace character
-and failing the conversion itself. So before calling `strtoull` we need to manually skip all the whitespace and check if we reached the end.
+and failing the conversion because the first character encountered wasn't legal for a number. So before calling `strtoull` we need to manually skip all the whitespace and check if we reached the end.
 
 ```cpp
 while (i < str.size() && isspace(str[i])) {
@@ -140,13 +140,13 @@ With that said, it passes my simple tests and I don't think it would change the 
 
 ### from_chars
 
-This function is probably the most promising since *cppreference* says:
+This function is probably the most promising since [*cppreference*](https://en.cppreference.com/w/cpp/utility/from_chars) says:
 
 > This is intended to allow the fastest possible implementation that is useful in common high-throughput contexts such as text-based interchange (JSON or XML).
 
 Similarly as with `strtoull` we have to check for the empty string ourselves, but this time it has one additional reason - `from_chars` doesn't skip leading whitespace. This means that we need to skip whitespace manually even before reading the second number.
 
-The call to `from_chars` itself is pretty simple:
+Then call to `from_chars` itself is pretty simple:
 
 ```cpp
 auto res = std::from_chars(&str[i], str.data() + str.size(), result.row);
@@ -157,7 +157,7 @@ if (res.ec == std::errc::invalid_argument || res.ec == std::errc::result_out_of_
 
 ### custom
 
-And finally, we get to the last contender - my own hand-written implementation. I wasn't trying to do anything too fancy. For the conversion of a single number I just used this simple loop:
+And finally, we get to the last contender - my own hand-written implementation. I wasn't trying to do anything too fancy. For the conversion of one number I just used this simple loop:
 
 ```cpp
 size_t res = 0;
@@ -180,7 +180,7 @@ if (res > new_res) {
 
 This passed my simple tests and I was proud of how quickly I came up with a working solution. However, a bit later when I was investigating the performance difference between this implementation and `from_chars` I took a peek at the microsoft c++ standard library and their overflow handling was quite different. That made me go back to my own solution and turns out it doesn't work at all.
 
-If `res` is a reasonably large value and we multiply it by 10 the result most likely overflows multiple times and it is basically lottery where it lands. So I needed something better. Thankfully, I already had something better - the standard library way of handling overflows. Which looks something like this:
+If `res` is a reasonably large value and we multiply it by 10 the result most likely wraps around multiple times and it is basically lottery where it lands - it could be larger then before or smaller the before, but no one knows which. So I needed something better. Thankfully, I already had something better - the standard library way of handling overflows. Which looks something like this:
 
 ```cpp
 constexpr size_t max_val = size_t(-1);
@@ -201,13 +201,13 @@ Here, we first precalculate some useful values - `risky_val` is the largest numb
 
 ## Results
 
-Finally, we get to the most important part, the results. I build and ran the benchmark both on Windows 10 and Ubuntu 20.04.3 on my laptop with Intel Core i7-7700HQ 2.80GHz cpu.
+Finally, we get to the most important part, the results. I built and ran the benchmark both on Windows 10 and Ubuntu 20.04.3 on my laptop with Intel Core i7-7700HQ 2.80GHz cpu.
 
 ### Linux
 
 The benchmark was built with `GCC 9.4.0`. Furthermore, I used [pyperf](https://github.com/psf/pyperf) to tune the system parameters with  `pyperf system tune` to make the benchmark more stable (as was suggested by the `nanobench` output).
 
-When I build the benchmark using `-O2` I got the following results.
+When I built the benchmark using `-O2` I got the following results.
 
 |               ns/op |                op/s |    err% |     total | benchmark
 |--------------------:|--------------------:|--------:|----------:|:----------
@@ -219,7 +219,7 @@ When I build the benchmark using `-O2` I got the following results.
 
 We can see that when *cppreference* says that `from_chars` is intended to be "the fastest possible implementation" it means it, since it outperforms all the other standard library solutions. However, what came as a surprise to me is that the custom implementation is even faster. That was quite suspicious and it led me to discover the overflow bug. But even after the fix, it is still faster.
 
-Interestingly, when built using `-O3` the result are a bit different.
+Interestingly, when built using `-O3` the results are a bit different.
 
 
 |               ns/op |                op/s |    err% |     total | benchmark
@@ -230,24 +230,26 @@ Interestingly, when built using `-O3` the result are a bit different.
 |               27.61 |       36,217,604.04 |    0.0% |      0.01 | `from_chars`
 |               30.09 |       33,238,469.22 |    0.0% |      0.01 | `custom`
 
-Now `from_chars` is slightly faster! I guess the main loop is easier for the compiler to unroll.
+Now `from_chars` is slightly faster! I guess its main loop is easier for the compiler to unroll.
 
 ### Windows
 
-The benchmark was built using `MSVC 19.31.31104.0`.
+The benchmark was built using `MSVC 19.31.31104.0`. However, on windows [pyperf](https://github.com/psf/pyperf) can't help you, so to improve the stability of the benchmark I at least set the minimum number of iterations to 200 000. And here are the results.
 
 |               ns/op |                op/s |    err% |     total | benchmark
 |--------------------:|--------------------:|--------:|----------:|:----------
-|              594.86 |        1,681,075.26 |    0.2% |      0.01 | `stringstream`
-|              176.32 |        5,671,481.90 |    0.3% |      0.01 | `sscanf`
-|               56.92 |       17,568,313.80 |    0.6% |      0.01 | `strtoull`
-|               46.36 |       21,570,059.64 |    0.1% |      0.01 | `from_chars`
-|               31.86 |       31,386,324.55 |    0.2% |      0.01 | `custom`
+|            1,145.31 |          873,125.13 |    1.1% |      2.75 | `stringstream`
+|              243.68 |        4,103,770.64 |    0.7% |      0.59 | `sscanf`
+|               85.78 |       11,657,458.83 |    1.3% |      0.21 | `strtoull`
+|               55.32 |       18,075,662.85 |    1.3% |      0.13 | `from_chars`
+|               53.94 |       18,538,602.00 |    1.4% |      0.13 | `custom`
+
+One curious thing is that everything is slower than on linux. I don't really have an idea why that is. The other noteworthy thing is that now the custom implementation and `from_chars` are basically the same.
 
 ### Conclusions
 
 All in all, it seems that the custom solution is the best. On linux with `-O3` it was slightly slower then `from_chars` but the margin was quite low and in all other cases it was faster or equal.
 
-If I had to say why that is, my first guess would be I overlooked something and my implementation is not correct. However, my second guess would be that `from_chars` has to handle more cases that I do. Sure, the requirements the standard places on it are quite cutdown compared to the other standard library facilities - it doesn't need to care about the locale, doesn't throw, doesn't need to handle the `+` prefix and `-` only for signed types. But still, it needs to work for all integer types and all bases. That would be a lot of overloads, so it all has to be in a single or just couple of implementations. And that is my advantage. I didn't need to care about that and focused only on my special case.
+If I had to say why that is, my first guess would be I overlooked something and my implementation is not correct. My second guess would be that `from_chars` has to handle more cases that I do. Sure, the requirements the standard places on it are quite cutdown compared to the other standard library facilities - it doesn't need to care about the locale, doesn't throw, doesn't need to handle the `+` prefix and `-` only for signed types. But still, it needs to work for all integer types and all bases. That would be a lot of overloads, so it all has to be in a single or just couple of implementations. And that is my advantage. I didn't need to care about that and focused only on my special case.
 
-With that said, for production code I would go with `from_chars` since I trust the standard library implementors a bit more then myself. However, for my side project I will live on the edge and happily use my own custom mess of a code. 
+With that said, for production code I would go with `from_chars` since I trust the standard library implementors a bit more then myself. However, for my side-project I will live on the edge and happily use my own custom mess of a code. 
